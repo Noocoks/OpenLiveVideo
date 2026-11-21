@@ -9,7 +9,7 @@ on:
         type: boolean
         default: false
       confirmation:
-        description: 'Escribe exactamente PUBLISH si has revisado el origen y autorizas la publicación'
+        description: 'Escribe exactamente PUBLISH para autorizar la publicación'
         required: false
         type: string
         default: ""
@@ -25,13 +25,12 @@ jobs:
   migrate:
     name: Prepare, audit and optionally publish OLV
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     env:
-      SOURCE_REPO: Noocoks/OpenLiveVideo_OLV
-      SOURCE_BRANCH: ui/minimalist-installer-agpl-ci
       TARGET_BRANCH: main
       PUBLISH_NOW: ${{ inputs.publish_now }}
       CONFIRMATION: ${{ inputs.confirmation }}
+      BOOTSTRAP_SHA: 133d727b260c13ac8710c23da96f94c0fc8a20a2
 
     steps:
       - name: Check source access secret
@@ -39,8 +38,8 @@ jobs:
           SOURCE_TOKEN: ${{ secrets.OLV_SOURCE_TOKEN }}
         run: |
           if [ -z "$SOURCE_TOKEN" ]; then
-            echo "::error::Falta el secreto OLV_SOURCE_TOKEN en Settings > Secrets and variables > Actions del repositorio público."
-            echo "Crea un fine-grained personal access token con Contents: Read-only para Noocoks/OpenLiveVideo_OLV y guárdalo como OLV_SOURCE_TOKEN."
+            echo "::error::Falta el secreto OLV_SOURCE_TOKEN en Settings > Secrets and variables > Actions."
+            echo "Crea un fine-grained token con Contents: Read-only para Noocoks/OpenLiveVideo_OLV y guárdalo como OLV_SOURCE_TOKEN."
             exit 1
           fi
 
@@ -54,19 +53,32 @@ jobs:
           fetch-depth: 1
           lfs: true
 
-      - name: Check source and destination
+      - name: Checkout bootstrap workflow
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository }}
+          ref: main
+          token: ${{ github.token }}
+          path: bootstrap
+          fetch-depth: 1
+
+      - name: Verify source and bootstrap destination
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          echo "Source branch HEAD:"
+          echo "Private source commit:"
           git -C source rev-parse HEAD
-          echo "Checking destination is still empty..."
+
           refs="$(git ls-remote "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git")"
-          if [ -n "$refs" ]; then
-            echo "::error::El repositorio destino ya tiene referencias. No se sobrescribirá nada."
+          expected="${BOOTSTRAP_SHA}	refs/heads/main"
+          if [ "$refs" != "$expected" ]; then
+            echo "::error::El destino ya no coincide con el commit inicial de configuración. No se sobrescribirá."
+            echo "Referencias actuales:"
+            printf '%s\n' "$refs"
             exit 1
           fi
+          echo "Destino verificado: solo contiene el commit de arranque conocido."
 
       - name: Build clean publication tree
         shell: bash
@@ -88,16 +100,15 @@ jobs:
             --exclude='node_modules/' \
             --exclude='.idea/' \
             --exclude='.vscode/' \
-            --exclude='.env' \
-            --exclude='.env.*' \
-            --exclude='!.env.example' \
+            --filter='- .env' \
+            --filter='- .env.*' \
+            --filter='+ .env.example' \
             source/ clean/
 
-          # Preserve this migration workflow in the clean repository.
+          # Keep the migration workflow in the clean history for future runs.
           mkdir -p clean/.github/workflows
-          cp .github/workflows/olv-clean-migration.yml clean/.github/workflows/olv-clean-migration.yml
+          cp bootstrap/.github/workflows/olv-clean-migration.yml clean/.github/workflows/olv-clean-migration.yml
 
-          # Add common local/private patterns without overwriting the project's rules.
           cat >> clean/.gitignore <<'EOF'
 
           # Local/private development files
@@ -168,27 +179,26 @@ jobs:
               if not path.is_file() or path.stat().st_size > 5 * 1024 * 1024:
                   continue
               try:
-                  text = path.read_text(encoding="utf-8")
+                  content = path.read_text(encoding="utf-8")
               except (UnicodeDecodeError, OSError):
                   continue
               for label, pattern in checks:
-                  if pattern.search(text):
+                  if pattern.search(content):
                       findings.append((str(path), label))
           if findings:
               for path, label in findings:
                   print(f"Potential local/private trace: {label} in {path}")
-              print("Review and remove these traces in the private source branch, then rerun.")
+              print("Revisa esos archivos en el repositorio privado y vuelve a ejecutar.")
               sys.exit(1)
-          print("No common local-machine path traces detected.")
+          print("No se detectaron rutas locales comunes.")
           PY
 
       - name: Prepare new one-commit history
         run: |
           set -euo pipefail
-          rm -rf clean/.git
           git -C clean init -b "$TARGET_BRANCH"
           git -C clean config user.name "Noocoks"
-          git -C clean config user.email "Noocoks@users.noreply.github.com"
+          git -C clean config user.email "289360693+Noocoks@users.noreply.github.com"
           git -C clean add --all
           if git -C clean diff --cached --name-only | grep -E '(^|/)(\.env($|\.)|id_rsa|id_ed25519|credentials\.json|secrets\.json)$|\.(pfx|p12|pem|key)$'; then
             echo "::error::Hay archivos con nombres típicos de secretos en staging."
@@ -199,11 +209,19 @@ jobs:
           echo "New root commit: $(git -C clean rev-parse HEAD)"
           echo "Tracked files: $(git -C clean ls-files | wc -l)"
 
+      - name: Upload clean tree for review
+        uses: actions/upload-artifact@v4
+        with:
+          name: OLV-clean-publication-review
+          path: clean/
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Review-only mode
         if: ${{ inputs.publish_now != true }}
         run: |
-          echo "AUDIT PASSED. No se ha publicado nada."
-          echo "Revisa el repositorio privado y vuelve a ejecutar este workflow con publish_now activado y confirmation=PUBLISH."
+          echo "AUDIT PASSED. No se ha publicado el proyecto."
+          echo "Descarga el artefacto OLV-clean-publication-review y revisa su contenido."
 
       - name: Require explicit publication confirmation
         if: ${{ inputs.publish_now == true }}
@@ -212,7 +230,6 @@ jobs:
             echo "::error::Para publicar, confirmation debe ser exactamente PUBLISH."
             exit 1
           fi
-          echo "Publication confirmation accepted."
 
       - name: Publish clean history
         if: ${{ inputs.publish_now == true }}
@@ -221,8 +238,8 @@ jobs:
         run: |
           set -euo pipefail
           git -C clean remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          # Normal push only: never force-overwrite an existing branch.
-          git -C clean push -u origin HEAD:refs/heads/main
+          # Replace only the known bootstrap commit; force-with-lease prevents clobbering other changes.
+          git -C clean push --force-with-lease=refs/heads/main:${BOOTSTRAP_SHA} -u origin HEAD:refs/heads/main
 
       - name: Verify public branch
         if: ${{ inputs.publish_now == true }}
