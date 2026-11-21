@@ -195,10 +195,10 @@ class ShortsFactoryApp:
         self.root.bind("<F5>", lambda _e: self._create())
 
     def _build_layout(self):
-        # A single writing surface: the story is the main focus.
+        """Build the OLV studio workspace with a restrained animated identity."""
         self._layout_canvas = tk.Canvas(self.root, bg=BG, bd=0, highlightthickness=0)
         self._layout_canvas.pack(fill="both", expand=True)
-        outer = ttk.Frame(self._layout_canvas, padding=(30, 20, 30, 20))
+        outer = ttk.Frame(self._layout_canvas, padding=(28, 22, 28, 24))
         self._layout_window = self._layout_canvas.create_window((0, 0), window=outer, anchor="nw")
         outer.bind("<Configure>", lambda _event: self._layout_canvas.configure(
             scrollregion=self._layout_canvas.bbox("all")))
@@ -208,74 +208,126 @@ class ShortsFactoryApp:
         self.root.bind_all("<Button-4>", self._on_linux_mousewheel)
         self.root.bind_all("<Button-5>", self._on_linux_mousewheel)
 
-        header = ttk.Frame(outer)
-        header.pack(fill="x", pady=(0, 28))
+        header = tk.Frame(outer, bg=BG)
+        header.pack(fill="x", pady=(0, 18))
+        brand = tk.Frame(header, bg=BG)
+        brand.pack(side="left", fill="x", expand=True)
         if self.logo_image is not None:
-            self.logo_small = self.logo_image.subsample(3, 3)
-            tk.Label(header, image=self.logo_small, bg=BG, bd=0).pack(side="left", padx=(0, 10))
-        ttk.Label(header, text="OLV", style="Title.TLabel").pack(side="left")
-        ttk.Label(header, text="Tu imaginación en vida", style="Muted.TLabel").pack(
-            side="left", padx=(12, 0), pady=(5, 0))
-        ttk.Button(header, text="Abrir", style="Quiet.TButton",
-                   command=self._open_story).pack(side="right")
-        ttk.Button(header, text="Guardar", style="Quiet.TButton",
-                   command=self._save_draft).pack(side="right", padx=(0, 8))
+            self.logo_small = self.logo_image.subsample(4, 4)
+            tk.Label(brand, image=self.logo_small, bg=BG, bd=0).pack(side="left", padx=(0, 11))
+        brand_copy = tk.Frame(brand, bg=BG)
+        brand_copy.pack(side="left", anchor="center")
+        tk.Label(brand_copy, text="OLV", bg=BG, fg=TEXT,
+                 font=("Segoe UI", 21, "bold")).pack(anchor="w")
+        tk.Label(brand_copy, text="TU IMAGINACIÓN EN VIDA", bg=BG, fg=MUTED,
+                 font=("Segoe UI", 8, "bold")).pack(anchor="w")
+        actions = tk.Frame(header, bg=BG)
+        actions.pack(side="right", anchor="center")
+        ttk.Button(actions, text="Abrir proyecto", style="Quiet.TButton",
+                   command=self._open_story).pack(side="left", padx=(0, 7))
+        ttk.Button(actions, text="Guardar", style="Quiet.TButton",
+                   command=self._save_draft).pack(side="left")
 
-        content = ttk.Frame(outer)
-        content.pack(fill="both", expand=True)
-        ttk.Label(content, text="Tu historia", style="Title.TLabel").pack(anchor="w", pady=(0, 12))
+        # Cinematic hero panel. The moving highlight is deliberately subtle.
+        hero = tk.Canvas(outer, height=132, bg="#11151b", bd=0,
+                         highlightthickness=1, highlightbackground=BORDER)
+        hero.pack(fill="x", pady=(0, 24))
+        hero.bind("<Configure>", lambda event: self._draw_hero(event.width, event.height))
+        self._hero_canvas = hero
+        self._hero_phase = 0
+        self._hero_after = None
+        self._draw_hero(920, 132)
+        if os.environ.get("OLV_REDUCE_MOTION", "").lower() not in {"1", "true", "yes"}:
+            self._animate_hero()
 
-        title_row = ttk.Frame(content)
-        title_row.pack(fill="x", pady=(0, 10))
-        self.title_entry = ttk.Entry(title_row, textvariable=self.title_var)
+        section = tk.Frame(outer, bg=BG)
+        section.pack(fill="x", pady=(0, 10))
+        tk.Label(section, text="01  /  ESPACIO DE CREACIÓN", bg=BG, fg=RED_LIGHT,
+                 font=("Segoe UI", 8, "bold")).pack(anchor="w")
+        tk.Label(section, text="Dale vida a tu historia.", bg=BG, fg=TEXT,
+                 font=("Segoe UI", 20, "bold")).pack(anchor="w", pady=(4, 2))
+        tk.Label(section, text="Construye el guion. OLV se encarga de convertirlo en vídeo.",
+                 bg=BG, fg=MUTED, font=("Segoe UI", 9)).pack(anchor="w")
+
+        title_panel = tk.Frame(outer, bg=PANEL, padx=14, pady=12,
+                              highlightthickness=1, highlightbackground=BORDER)
+        title_panel.pack(fill="x", pady=(13, 10))
+        tk.Label(title_panel, text="TÍTULO DEL PROYECTO", bg=PANEL, fg=MUTED,
+                 font=("Segoe UI", 8, "bold")).pack(anchor="w", pady=(0, 6))
+        self.title_entry = ttk.Entry(title_panel, textvariable=self.title_var,
+                                     font=("Segoe UI", 12))
         self.title_entry.pack(fill="x")
 
-        editor_shell = tk.Frame(content, bg=BORDER, padx=1, pady=1)
-        editor_shell.pack(fill="both", expand=True)
-        self.script = tk.Text(editor_shell, wrap="word", undo=True, bg="#10151b", fg=TEXT,
+        editor_panel = tk.Frame(outer, bg=PANEL, padx=1, pady=1,
+                                highlightthickness=1, highlightbackground=BORDER)
+        editor_panel.pack(fill="both", expand=True, pady=(0, 8))
+        editor_head = tk.Frame(editor_panel, bg=PANEL, padx=14, pady=10)
+        editor_head.pack(fill="x")
+        tk.Label(editor_head, text="GUION", bg=PANEL, fg=TEXT,
+                 font=("Segoe UI", 9, "bold")).pack(side="left")
+        self.script_stats = tk.StringVar(value="0 caracteres  ·  0 escenas")
+        tk.Label(editor_head, textvariable=self.script_stats, bg=PANEL, fg=MUTED,
+                 font=("Segoe UI", 8)).pack(side="right")
+        tk.Frame(editor_panel, bg=BORDER, height=1).pack(fill="x")
+        self.script = tk.Text(editor_panel, wrap="word", undo=True, bg="#0b0f14", fg=TEXT,
                               insertbackground=RED_LIGHT, selectbackground="#6f1727",
-                              relief="flat", padx=16, pady=14, font=("Segoe UI", 11),
-                              highlightthickness=0, spacing1=3, spacing3=5, borderwidth=0)
-        self.script.pack(fill="both", expand=True)
+                              relief="flat", padx=17, pady=15, font=("Segoe UI", 11),
+                              highlightthickness=0, spacing1=4, spacing3=6, borderwidth=0,
+                              height=10)
+        self.script.pack(fill="both", expand=True, padx=1, pady=1)
         self.script.insert("1.0", "")
+        self.script.bind("<KeyRelease>", self._update_script_stats, add="+")
+        self.script.bind("<<Paste>>", lambda _event: self.root.after(20, self._update_script_stats))
+        tk.Label(outer, text="Separa cada escena con una línea en blanco. Tu borrador se guarda automáticamente.",
+                 bg=BG, fg=MUTED, font=("Segoe UI", 8)).pack(anchor="w", pady=(0, 16))
 
-        ttk.Label(content, text="Separa cada escena con una línea en blanco.",
-                  style="Muted.TLabel").pack(anchor="w", pady=(8, 18))
+        settings_head = tk.Frame(outer, bg=BG)
+        settings_head.pack(fill="x", pady=(0, 9))
+        tk.Label(settings_head, text="02  /  CONFIGURACIÓN DE PRODUCCIÓN", bg=BG,
+                 fg=RED_LIGHT, font=("Segoe UI", 8, "bold")).pack(anchor="w")
 
-        options = ttk.Frame(content)
-        options.pack(fill="x", pady=(0, 14))
-        voice_group = ttk.Frame(options)
-        voice_group.pack(side="left", fill="x", expand=True)
-        ttk.Label(voice_group, text="VOZ", style="Muted.TLabel").pack(anchor="w", pady=(0, 5))
+        options = tk.Frame(outer, bg=BG)
+        options.pack(fill="x", pady=(0, 17))
+        for column in range(3):
+            options.grid_columnconfigure(column, weight=1, uniform="settings")
+        voice_group = tk.Frame(options, bg=PANEL, padx=12, pady=12,
+                               highlightthickness=1, highlightbackground=BORDER)
+        voice_group.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+        music_group = tk.Frame(options, bg=PANEL, padx=12, pady=12,
+                               highlightthickness=1, highlightbackground=BORDER)
+        music_group.grid(row=0, column=1, sticky="nsew", padx=3)
+        output_group = tk.Frame(options, bg=PANEL, padx=12, pady=12,
+                                highlightthickness=1, highlightbackground=BORDER)
+        output_group.grid(row=0, column=2, sticky="nsew", padx=(6, 0))
+
+        tk.Label(voice_group, text="VOZ", bg=PANEL, fg=MUTED,
+                 font=("Segoe UI", 8, "bold")).pack(anchor="w", pady=(0, 7))
         self.voice_box = ttk.Combobox(voice_group, textvariable=self.voice_label,
-            values=list(VOICES.keys()), state="readonly", width=25)
-        self.voice_box.pack(anchor="w", fill="x", padx=(0, 12))
+            values=list(VOICES.keys()), state="readonly")
+        self.voice_box.pack(fill="x")
         self.voice_box.bind("<<ComboboxSelected>>", lambda _e: self._persist_preferences())
 
-        music_group = ttk.Frame(options)
-        music_group.pack(side="left", fill="x", expand=True, padx=(8, 8))
-        ttk.Label(music_group, text="MÚSICA", style="Muted.TLabel").pack(anchor="w", pady=(0, 5))
-        music_row = ttk.Frame(music_group)
+        tk.Label(music_group, text="MÚSICA", bg=PANEL, fg=MUTED,
+                 font=("Segoe UI", 8, "bold")).pack(anchor="w", pady=(0, 7))
+        music_row = tk.Frame(music_group, bg=PANEL)
         music_row.pack(fill="x")
         ttk.Label(music_row, textvariable=self._music_name_var(),
                   style="Muted.TLabel").pack(side="left", fill="x", expand=True)
         ttk.Button(music_row, text="Elegir", style="Quiet.TButton",
-                   command=self._choose_music).pack(side="right")
+                   command=self._choose_music).pack(side="right", padx=(5, 0))
 
-        output_group = ttk.Frame(options)
-        output_group.pack(side="left", fill="x", expand=True, padx=(8, 0))
-        ttk.Label(output_group, text="DESTINO", style="Muted.TLabel").pack(anchor="w", pady=(0, 5))
-        output_row = ttk.Frame(output_group)
+        tk.Label(output_group, text="DESTINO", bg=PANEL, fg=MUTED,
+                 font=("Segoe UI", 8, "bold")).pack(anchor="w", pady=(0, 7))
+        output_row = tk.Frame(output_group, bg=PANEL)
         output_row.pack(fill="x")
         ttk.Label(output_row, textvariable=self.output_var,
                   style="Muted.TLabel").pack(side="left", fill="x", expand=True)
         ttk.Button(output_row, text="Cambiar", style="Quiet.TButton",
-                   command=self._choose_output).pack(side="right")
+                   command=self._choose_output).pack(side="right", padx=(5, 0))
 
-        ttk.Separator(content).pack(fill="x", pady=(2, 14))
-        footer = ttk.Frame(content)
-        footer.pack(fill="x")
-        status_area = ttk.Frame(footer)
+        footer = tk.Frame(outer, bg=BG)
+        footer.pack(fill="x", pady=(1, 0))
+        status_area = tk.Frame(footer, bg=BG)
         status_area.pack(side="left", fill="x", expand=True)
         self.progress = ttk.Progressbar(status_area, mode="indeterminate",
                                         style="Horizontal.TProgressbar")
@@ -284,9 +336,49 @@ class ShortsFactoryApp:
         self.cancel_btn = ttk.Button(footer, text="Cancelar", style="Quiet.TButton",
                                      command=self._cancel_production, state="disabled")
         self.cancel_btn.pack(side="right", padx=(10, 0))
-        self.create_btn = ttk.Button(footer, text="Crear Short", style="Accent.TButton",
-                                     command=self._create)
+        self.create_btn = ttk.Button(footer, text="▶  CREAR PRODUCCIÓN",
+                                     style="Accent.TButton", command=self._create)
         self.create_btn.pack(side="right", padx=(0, 8))
+        self._update_script_stats()
+
+    def _draw_hero(self, width, height):
+        canvas = self._hero_canvas
+        canvas.delete("all")
+        canvas.create_rectangle(0, 0, width, height, fill="#11151b", outline="")
+        canvas.create_oval(width - 210, -115, width + 35, 130,
+                           fill="#251018", outline="")
+        canvas.create_oval(width - 160, -78, width + 4, 86,
+                           outline="#5c1727", width=2)
+        canvas.create_line(0, height - 2, width, height - 2, fill="#3b1722", width=2)
+        canvas.create_text(24, 29, anchor="w", text="OLV  /  OPEN LIVE VIDEO",
+                           fill="#d14a68", font=("Segoe UI", 8, "bold"))
+        canvas.create_text(24, 64, anchor="w", text="DE LA IDEA A LA IMAGEN.",
+                           fill="#f0f1f3", font=("Segoe UI", 19, "bold"))
+        canvas.create_text(25, 94, anchor="w",
+                           text="Tu estudio creativo. Tu historia. Tu universo.",
+                           fill="#9aa5af", font=("Segoe UI", 9))
+        self._hero_light = canvas.create_line(0, height - 2, 90, height - 2,
+                                               fill="#d14a68", width=3)
+
+    def _animate_hero(self):
+        if not self.root.winfo_exists():
+            return
+        try:
+            width = max(1, self._hero_canvas.winfo_width())
+            height = max(1, self._hero_canvas.winfo_height())
+            self._hero_phase = (self._hero_phase + 7) % (width + 120)
+            x = self._hero_phase - 90
+            self._hero_canvas.coords(self._hero_light, x, height - 2, x + 90, height - 2)
+            self._hero_after = self.root.after(45, self._animate_hero)
+        except tk.TclError:
+            self._hero_after = None
+
+    def _update_script_stats(self, _event=None):
+        if not hasattr(self, "script_stats"):
+            return
+        value = self.script.get("1.0", "end-1c")
+        scenes = len([part for part in value.strip().split("\\n\\n") if part.strip()])
+        self.script_stats.set(f"{len(value)} caracteres  ·  {scenes} escenas")
 
     def _on_mousewheel(self, event):
         if isinstance(event.widget, tk.Text):
