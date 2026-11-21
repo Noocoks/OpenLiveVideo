@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "olv"
+version = "0.4.0"
+description = "OLV: local YouTube Shorts production"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "AGPL-3.0-or-later" }
+dependencies = ["requests>=2.31,<3", "edge-tts>=6.1,<8", "CairoSVG>=2.7,<3", "keyring>=25,<27"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<9", "pyinstaller>=6.10,<7"]
+
+[project.scripts]
+olv = "shortsfactory.cli:main"
+olv-gui = "shortsfactory.launcher:main"
+shortsfactory = "shortsfactory.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["shortsfactory*"]
+
+[tool.setuptools.package-data]
+shortsfactory = ["assets/branding/*.svg"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
