@@ -96,9 +96,9 @@ jobs:
             --exclude='node_modules/' \
             --exclude='.idea/' \
             --exclude='.vscode/' \
+            --filter='+ .env.example' \
             --filter='- .env' \
             --filter='- .env.*' \
-            --filter='+ .env.example' \
             source/ clean/
 
           mkdir -p clean/.github/workflows
