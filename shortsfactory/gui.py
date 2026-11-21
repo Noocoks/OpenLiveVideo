@@ -361,9 +361,9 @@ class ShortsFactoryApp:
                                                fill="#d14a68", width=3)
 
     def _animate_hero(self):
-        if not self.root.winfo_exists():
-            return
         try:
+            if not self.root.winfo_exists():
+                return
             width = max(1, self._hero_canvas.winfo_width())
             height = max(1, self._hero_canvas.winfo_height())
             self._hero_phase = (self._hero_phase + 7) % (width + 120)
@@ -377,7 +377,7 @@ class ShortsFactoryApp:
         if not hasattr(self, "script_stats"):
             return
         value = self.script.get("1.0", "end-1c")
-        scenes = len([part for part in value.strip().split("\\n\\n") if part.strip()])
+        scenes = len([part for part in value.strip().split("\n\n") if part.strip()])
         self.script_stats.set(f"{len(value)} caracteres  ·  {scenes} escenas")
 
     def _on_mousewheel(self, event):
@@ -436,6 +436,7 @@ class ShortsFactoryApp:
             self.output_var.set(data.get("output_dir", self.output_var.get()))
             self.music_name.set(Path(self.music_var.get()).name if self.music_var.get()
                                 else "Sin música seleccionada")
+            self._update_script_stats()
             if data.get("script", "").strip():
                 self.status.set("Último borrador restaurado automáticamente.")
         except (OSError, json.JSONDecodeError, AttributeError):
