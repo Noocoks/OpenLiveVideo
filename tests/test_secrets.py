@@ -1,3 +1,4 @@
+import os
 import sys
 from types import SimpleNamespace
 
@@ -57,11 +58,15 @@ def test_keyring_migration_scrubs_legacy_settings_file(tmp_path, monkeypatch):
                             get_password=backend.get_password,
                             delete_password=backend.delete_password)
     monkeypatch.setitem(sys.modules, "keyring", fake)
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    if os.name == "nt":
+        monkeypatch.setenv("APPDATA", str(tmp_path))
+        old_dir = tmp_path / "ShortsFactory"
+    else:
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+        old_dir = tmp_path / "shortsfactory"
     current = tmp_path / "olv"
     current.mkdir()
     monkeypatch.setattr(config, "config_dir", lambda: current)
-    old_dir = tmp_path / "shortsfactory"
     old_dir.mkdir()
     old_file = old_dir / "settings.json"
     old_file.write_text('{"pixabay_api_key":"legacy-secret","voice":"es-ES-AlvaroNeural"}')
