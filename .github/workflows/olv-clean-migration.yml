@@ -210,11 +210,17 @@ jobs:
           echo "New root commit: $(git -C clean rev-parse HEAD)"
           echo "Tracked files: $(git -C clean ls-files | wc -l)"
 
+      - name: Prepare review copy without Git internals
+        run: |
+          mkdir review
+          rsync -a --exclude='.git/' clean/ review/
+
       - name: Upload clean tree for review
         uses: actions/upload-artifact@v4
         with:
           name: OLV-clean-publication-review
-          path: clean/
+          path: review/
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 7
 
