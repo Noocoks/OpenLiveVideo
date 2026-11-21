@@ -67,7 +67,7 @@ jobs:
           set -euo pipefail
           echo "Private source commit:"
           git -C source rev-parse HEAD
-          refs="$(git ls-remote "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git")"
+          refs="$(git ls-remote --heads "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git")"
           expected="${GITHUB_SHA}	refs/heads/main"
           if [ "$refs" != "$expected" ]; then
             echo "::error::La rama main ha cambiado desde el inicio del workflow. No se sobrescribirá."
