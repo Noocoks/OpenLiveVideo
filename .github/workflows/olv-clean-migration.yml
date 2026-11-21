@@ -1,0 +1,237 @@
+name: OLV clean migration to public repository
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish_now:
+        description: "Publicar después de preparar y auditar la copia"
+        required: true
+        type: boolean
+        default: false
+      confirmation:
+        description: 'Escribe exactamente PUBLISH si has revisado el origen y autorizas la publicación'
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: olv-public-migration
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    name: Prepare, audit and optionally publish OLV
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SOURCE_REPO: Noocoks/OpenLiveVideo_OLV
+      SOURCE_BRANCH: ui/minimalist-installer-agpl-ci
+      TARGET_BRANCH: main
+      PUBLISH_NOW: ${{ inputs.publish_now }}
+      CONFIRMATION: ${{ inputs.confirmation }}
+
+    steps:
+      - name: Check source access secret
+        env:
+          SOURCE_TOKEN: ${{ secrets.OLV_SOURCE_TOKEN }}
+        run: |
+          if [ -z "$SOURCE_TOKEN" ]; then
+            echo "::error::Falta el secreto OLV_SOURCE_TOKEN en Settings > Secrets and variables > Actions del repositorio público."
+            echo "Crea un fine-grained personal access token con Contents: Read-only para Noocoks/OpenLiveVideo_OLV y guárdalo como OLV_SOURCE_TOKEN."
+            exit 1
+          fi
+
+      - name: Checkout private source branch
+        uses: actions/checkout@v4
+        with:
+          repository: Noocoks/OpenLiveVideo_OLV
+          ref: ui/minimalist-installer-agpl-ci
+          token: ${{ secrets.OLV_SOURCE_TOKEN }}
+          path: source
+          fetch-depth: 1
+          lfs: true
+
+      - name: Check source and destination
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          echo "Source branch HEAD:"
+          git -C source rev-parse HEAD
+          echo "Checking destination is still empty..."
+          refs="$(git ls-remote "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git")"
+          if [ -n "$refs" ]; then
+            echo "::error::El repositorio destino ya tiene referencias. No se sobrescribirá nada."
+            exit 1
+          fi
+
+      - name: Build clean publication tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir clean
+          rsync -a --delete \
+            --exclude='.git' \
+            --exclude='.DS_Store' \
+            --exclude='Thumbs.db' \
+            --exclude='desktop.ini' \
+            --exclude='__pycache__/' \
+            --exclude='*.py[cod]' \
+            --exclude='.pytest_cache/' \
+            --exclude='.mypy_cache/' \
+            --exclude='.ruff_cache/' \
+            --exclude='.venv/' \
+            --exclude='venv/' \
+            --exclude='node_modules/' \
+            --exclude='.idea/' \
+            --exclude='.vscode/' \
+            --exclude='.env' \
+            --exclude='.env.*' \
+            --exclude='!.env.example' \
+            source/ clean/
+
+          # Preserve this migration workflow in the clean repository.
+          mkdir -p clean/.github/workflows
+          cp .github/workflows/olv-clean-migration.yml clean/.github/workflows/olv-clean-migration.yml
+
+          # Add common local/private patterns without overwriting the project's rules.
+          cat >> clean/.gitignore <<'EOF'
+
+          # Local/private development files
+          .env
+          .env.*
+          !.env.example
+          *.log
+          *.tmp
+          *.bak
+          *.swp
+          *.swo
+          .DS_Store
+          Thumbs.db
+          desktop.ini
+          __pycache__/
+          .pytest_cache/
+          .mypy_cache/
+          .ruff_cache/
+          .venv/
+          venv/
+          EOF
+
+          echo "Files in clean tree: $(find clean -type f | wc -l)"
+          echo "Approximate size (MiB): $(du -sm clean | cut -f1)"
+
+      - name: Verify AGPL-3.0-or-later license
+        run: |
+          set -euo pipefail
+          test -f clean/LICENSE || { echo "::error::No existe clean/LICENSE"; exit 1; }
+          grep -Eqi 'GNU AFFERO GENERAL PUBLIC LICENSE' clean/LICENSE
+          grep -Eqi 'version 3' clean/LICENSE
+          grep -Eqi 'or \(at your option\) any later version' clean/LICENSE || {
+            echo "::error::LICENSE no confirma AGPL v3 o posterior."
+            exit 1
+          }
+          echo "AGPL-3.0-or-later license text verified."
+
+      - name: Install Gitleaks
+        run: |
+          set -euo pipefail
+          VERSION="$(curl -fsSL https://api.github.com/repos/gitleaks/gitleaks/releases/latest | python3 -c 'import json,sys; print(json.load(sys.stdin)["tag_name"])')"
+          ARCHIVE="gitleaks_${VERSION#v}_linux_x64.tar.gz"
+          curl -fsSLo /tmp/gitleaks.tar.gz "https://github.com/gitleaks/gitleaks/releases/download/${VERSION}/${ARCHIVE}"
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          sudo install /tmp/gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+
+      - name: Scan for secrets
+        run: |
+          set -euo pipefail
+          gitleaks dir clean --redact --exit-code 1
+
+      - name: Scan for local machine traces
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+          import re, sys
+
+          root = Path("clean")
+          checks = [
+              ("Windows user profile path", re.compile(r"(?i)\b[A-Z]:\\Users\\[^\\\s\"'<>]+")),
+              ("Unix home directory path", re.compile(r"(?<!\w)/home/[^/\s\"'<>]+")),
+              ("Possible private key", re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----")),
+          ]
+          findings = []
+          for path in root.rglob("*"):
+              if not path.is_file() or path.stat().st_size > 5 * 1024 * 1024:
+                  continue
+              try:
+                  text = path.read_text(encoding="utf-8")
+              except (UnicodeDecodeError, OSError):
+                  continue
+              for label, pattern in checks:
+                  if pattern.search(text):
+                      findings.append((str(path), label))
+          if findings:
+              for path, label in findings:
+                  print(f"Potential local/private trace: {label} in {path}")
+              print("Review and remove these traces in the private source branch, then rerun.")
+              sys.exit(1)
+          print("No common local-machine path traces detected.")
+          PY
+
+      - name: Prepare new one-commit history
+        run: |
+          set -euo pipefail
+          rm -rf clean/.git
+          git -C clean init -b "$TARGET_BRANCH"
+          git -C clean config user.name "Noocoks"
+          git -C clean config user.email "Noocoks@users.noreply.github.com"
+          git -C clean add --all
+          if git -C clean diff --cached --name-only | grep -E '(^|/)(\.env($|\.)|id_rsa|id_ed25519|credentials\.json|secrets\.json)$|\.(pfx|p12|pem|key)$'; then
+            echo "::error::Hay archivos con nombres típicos de secretos en staging."
+            exit 1
+          fi
+          git -C clean commit -m "Initial public release: OLV 0.4.0"
+          test "$(git -C clean rev-list --count HEAD)" = "1"
+          echo "New root commit: $(git -C clean rev-parse HEAD)"
+          echo "Tracked files: $(git -C clean ls-files | wc -l)"
+
+      - name: Review-only mode
+        if: ${{ inputs.publish_now != true }}
+        run: |
+          echo "AUDIT PASSED. No se ha publicado nada."
+          echo "Revisa el repositorio privado y vuelve a ejecutar este workflow con publish_now activado y confirmation=PUBLISH."
+
+      - name: Require explicit publication confirmation
+        if: ${{ inputs.publish_now == true }}
+        run: |
+          if [ "$CONFIRMATION" != "PUBLISH" ]; then
+            echo "::error::Para publicar, confirmation debe ser exactamente PUBLISH."
+            exit 1
+          fi
+          echo "Publication confirmation accepted."
+
+      - name: Publish clean history
+        if: ${{ inputs.publish_now == true }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git -C clean remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          # Normal push only: never force-overwrite an existing branch.
+          git -C clean push -u origin HEAD:refs/heads/main
+
+      - name: Verify public branch
+        if: ${{ inputs.publish_now == true }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          remote_sha="$(git ls-remote "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" refs/heads/main | awk '{print $1}')"
+          local_sha="$(git -C clean rev-parse HEAD)"
+          test -n "$remote_sha"
+          test "$remote_sha" = "$local_sha"
+          echo "Verified public main at $remote_sha"
